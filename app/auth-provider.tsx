@@ -32,8 +32,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const unsub = onAuthStateChanged(auth, setUser);
 
     // Se o login caiu em redirect, finaliza aqui sem quebrar a página
-    getRedirectResult(auth).catch((e) => {
-      if (e) console.warn("Firebase getRedirectResult error:", e?.code, e?.message);
+    getRedirectResult(auth).catch((e: unknown) => {
+      const err = e as Error & { code?: string; message?: string };
+      if (err) {
+        console.warn(
+          "Firebase getRedirectResult error:",
+          err.code || "sem-code",
+          err.message
+        );
+      }
     });
 
     return () => unsub();
@@ -48,25 +55,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
-  const isSuperadmin = !!(user?.email && superadmins.includes(user.email.toLowerCase()));
+  const isSuperadmin = !!(
+    user?.email && superadmins.includes(user.email.toLowerCase())
+  );
 
   async function loginWithGoogle() {
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (e: any) {
-      console.warn("Firebase popup sign-in error:", e?.code, e?.message);
+    } catch (e: unknown) {
+      const err = e as Error & { code?: string; message?: string };
+      console.warn(
+        "Firebase popup sign-in error:",
+        err.code || "sem-code",
+        err.message
+      );
 
       // Fallback quando popup é bloqueado ou domínio não está autorizado
       if (
-        e?.code === "auth/popup-blocked" ||
-        e?.code === "auth/popup-closed-by-user" ||
-        e?.code === "auth/unauthorized-domain"
+        err.code === "auth/popup-blocked" ||
+        err.code === "auth/popup-closed-by-user" ||
+        err.code === "auth/unauthorized-domain"
       ) {
         await signInWithRedirect(auth, googleProvider);
         return;
       }
 
-      alert("Falha no login: " + (e?.message || e?.code || "erro desconhecido"));
+      alert(
+        "Falha no login: " +
+          (err.message || err.code || "erro desconhecido")
+      );
     }
   }
 

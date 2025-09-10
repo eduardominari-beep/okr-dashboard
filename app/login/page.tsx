@@ -10,13 +10,18 @@ export default function LoginPage() {
       <button
         onClick={async () => {
           try {
-            // debug opcional
-            console.log("API KEY em runtime:", (auth.app.options as any)?.apiKey);
+            // debug opcional sem usar "any"
+            console.log(
+              "API KEY em runtime:",
+              (auth.app.options as { apiKey?: string })?.apiKey
+            );
+
             await signInWithPopup(auth, googleProvider);
             window.location.href = "/"; // volta pro dashboard
-          } catch (e: any) {
-            alert(`Erro no popup: ${e?.code || e?.message}`);
-            console.warn(e);
+          } catch (e: unknown) {
+            const err = e as Error & { code?: string; message?: string };
+            alert(`Erro no popup: ${err.code || err.message}`);
+            console.warn(err);
           }
         }}
         className="px-4 py-2 bg-black text-white rounded-2xl"

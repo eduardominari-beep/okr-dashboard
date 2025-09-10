@@ -5,28 +5,26 @@ import { signInWithPopup } from "firebase/auth";
 
 export default function LoginPage() {
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center gap-4">
-      <h1 className="text-2xl font-bold">Bem-vindo!</h1>
+    <main className="min-h-screen flex flex-col items-center justify-center gap-6">
+      <div className="text-center">
+        <h1 className="text-2xl font-bold">OKR Management System</h1>
+        <p className="text-sm text-zinc-500">Powered by Straggia</p>
+      </div>
+
       <button
         onClick={async () => {
           try {
-            // debug opcional sem usar "any"
-            console.log(
-              "API KEY em runtime:",
-              (auth.app.options as { apiKey?: string })?.apiKey
-            );
-
             await signInWithPopup(auth, googleProvider);
-            window.location.href = "/"; // volta pro dashboard
+            window.location.href = "/";
           } catch (e: unknown) {
             const err = e as Error & { code?: string; message?: string };
-            alert(`Erro no popup: ${err.code || err.message}`);
+            alert(`Erro no login: ${err.code || err.message}`);
             console.warn(err);
           }
         }}
-        className="px-4 py-2 bg-black text-white rounded-2xl"
+        className="px-5 py-2.5 bg-black text-white rounded-2xl shadow hover:opacity-90"
       >
-        Entrar com Google (popup)
+        Entrar com Google
       </button>
     </main>
   );

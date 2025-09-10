@@ -10,6 +10,7 @@ import {
   signOut,
   User,
 } from "firebase/auth";
+import { ensureUserDoc } from "@/lib/firestore";
 
 type Ctx = {
   user: User | null;
@@ -29,18 +30,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, setUser);
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (u?.uid && u.email) await ensureUserDoc(u.uid, u.email);
+    });
 
-    // Se o login caiu em redirect, finaliza aqui sem quebrar a página
     getRedirectResult(auth).catch((e: unknown) => {
       const err = e as Error & { code?: string; message?: string };
-      if (err) {
-        console.warn(
-          "Firebase getRedirectResult error:",
-          err.code || "sem-code",
-          err.message
-        );
-      }
+      console.warn("getRedirectResult:", err.code, err.message);
     });
 
     return () => unsub();
@@ -55,22 +52,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
-  const isSuperadmin = !!(
-    user?.email && superadmins.includes(user.email.toLowerCase())
-  );
+  const isSuperadmin = !!(user?.email && superadmins.includes(user.email.toLowerCase()));
 
   async function loginWithGoogle() {
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (e: unknown) {
       const err = e as Error & { code?: string; message?: string };
-      console.warn(
-        "Firebase popup sign-in error:",
-        err.code || "sem-code",
-        err.message
-      );
-
-      // Fallback quando popup é bloqueado ou domínio não está autorizado
       if (
         err.code === "auth/popup-blocked" ||
         err.code === "auth/popup-closed-by-user" ||
@@ -79,11 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await signInWithRedirect(auth, googleProvider);
         return;
       }
-
-      alert(
-        "Falha no login: " +
-          (err.message || err.code || "erro desconhecido")
-      );
+      alert("Falha no login: " + (err.message || err.code || "erro desconhecido"));
     }
   }
 

@@ -197,8 +197,8 @@ export default function Page() {
     const k: KR = {
       id: uid(),
       descricao: (novoKR.descricao || "").trim() || "KR",
-      previsto: clamp(parseFloat(novoKR.previsto as any)) || 100,
-      realizado: clamp(parseFloat(novoKR.realizado as any)) || 0,
+      previsto: clamp(parseFloat(novoKR.previsto as "0" )) || 100,
+      realizado: clamp(parseFloat(novoKR.realizado as "0" )) || 0,
       unidade: novoKR.unidade || "%",
     };
     setProjects((prev) =>

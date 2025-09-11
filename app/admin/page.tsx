@@ -1,183 +1,262 @@
 "use client";
-import { useEffect, useState } from "react";
-import { db } from "@/lib/firebase";
-import {
-  addDoc, setDoc, doc, getDocs, collection, query, where,
-} from "firebase/firestore";
-import { useAuth } from "../auth-provider";
 
-type Role = "admin" | "editor" | "viewer";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useAuth } from "../auth-provider";
+import {
+  createClient,
+  grantClientAccess,
+  listClients,
+  listUsers,
+  upsertUserByEmail,
+  type AppUser,
+  type Client,
+  type Role,
+} from "@/lib/firestore";
+
+function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className={`w-full rounded-md border border-zinc-300 px-3 py-2 outline-none focus:ring-2 focus:ring-zinc-900 ${props.className ?? ""}`}
+    />
+  );
+}
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-2xl border border-zinc-200 p-5">
+      <h2 className="mb-3 text-lg font-semibold">{title}</h2>
+      {children}
+    </section>
+  );
+}
 
 export default function AdminPage() {
-  const { user, logout } = useAuth();
+  const { user, isSuperadmin, logout } = useAuth();
 
-  // inputs
-  const [clientName, setClientName] = useState("");
-  const [newUserEmail, setNewUserEmail] = useState("");
-  const [newUserRole, setNewUserRole] = useState<Role>("admin");
+  // ---- Hooks DEVEM vir antes de qualquer return condicional ----
+  const [clients, setClients] = useState<Client[]>([]);
+  const [users, setUsers] = useState<AppUser[]>([]);
 
-  // listas
-  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
-  const [users, setUsers] = useState<{ id: string; email: string; role?: Role }[]>([]);
+  const [newClientName, setNewClientName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<Role>("admin");
 
-  const [selectedUserEmail, setSelectedUserEmail] = useState("");
+  const [selectedUserId, setSelectedUserId] = useState("");
   const [selectedClientId, setSelectedClientId] = useState("");
 
-  // carregar listas
-  useEffect(() => {
-    (async () => {
-      const cs = await getDocs(collection(db, "clients"));
-      setClients(cs.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+  const meEmail = user?.email ?? "";
 
-      const us = await getDocs(collection(db, "users"));
-      setUsers(us.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+  useEffect(() => {
+    // roda sempre; se precisar do user, só checar dentro
+    (async () => {
+      const [c, u] = await Promise.all([listClients(), listUsers()]);
+      setClients(c);
+      setUsers(u);
     })();
   }, []);
 
-  async function handleCreateClient() {
-    if (!clientName.trim()) return;
-    await addDoc(collection(db, "clients"), {
-      name: clientName.trim(),
-      createdAt: Date.now(),
-      createdBy: user?.email || "unknown",
-    });
-    setClientName("");
-    // refresh
-    const cs = await getDocs(collection(db, "clients"));
-    setClients(cs.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+  const sortedUsers = useMemo(
+    () => [...users].sort((a, b) => a.email.localeCompare(b.email)),
+    [users]
+  );
+
+  const sortedClients = useMemo(
+    () => [...clients].sort((a, b) => a.name.localeCompare(b.name)),
+    [clients]
+  );
+
+  // ---- Actions ----
+  async function onCreateClient(e: FormEvent) {
+    e.preventDefault();
+    const name = newClientName.trim();
+    if (!name || !user) return; // garante TS e runtime
+    await createClient(name, user.uid);
+    setNewClientName("");
+    const c = await listClients();
+    setClients(c);
   }
 
-  async function handleCreateUser() {
-    const email = newUserEmail.trim().toLowerCase();
+  async function onInviteUser(e: FormEvent) {
+    e.preventDefault();
+    const email = inviteEmail.trim().toLowerCase();
     if (!email) return;
-    // cria/atualiza o doc do user (convite simples)
-    await setDoc(doc(db, "users", email), {
-      email,
-      defaultRole: newUserRole,
-      createdAt: Date.now(),
-    }, { merge: true });
-    setNewUserEmail("");
-    // refresh
-    const us = await getDocs(collection(db, "users"));
-    setUsers(us.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    await upsertUserByEmail(email, inviteRole);
+    setInviteEmail("");
+    const u = await listUsers();
+    setUsers(u);
   }
 
-  async function handleGrantAccess() {
-    if (!selectedUserEmail || !selectedClientId) return;
-    const email = selectedUserEmail.toLowerCase();
-    const memId = `${email}_${selectedClientId}`;
-    await setDoc(doc(db, "memberships", memId), {
-      userEmail: email,
-      clientId: selectedClientId,
-      role: "admin", // ou escolha via UI
-      createdAt: Date.now(),
-    }, { merge: true });
-    alert("Acesso concedido!");
+  async function onGrantAccess(e: FormEvent) {
+    e.preventDefault();
+    if (!selectedUserId || !selectedClientId) return;
+    await grantClientAccess(selectedUserId, selectedClientId);
+    setSelectedUserId("");
+    setSelectedClientId("");
+    const u = await listUsers();
+    setUsers(u);
+  }
+
+  // ---- Render com checagem de acesso (depois dos hooks) ----
+  if (!user || !isSuperadmin) {
+    return (
+      <main className="mx-auto flex min-h-[60vh] max-w-3xl flex-col items-center justify-center gap-4">
+        <p className="text-lg font-semibold">Acesso negado</p>
+        <p className="text-sm text-zinc-600">
+          Somente superadmin pode acessar o Console Admin.
+        </p>
+        <button
+          onClick={logout}
+          className="mt-2 rounded-full bg-black px-4 py-2 text-white"
+        >
+          Sair
+        </button>
+      </main>
+    );
   }
 
   return (
-    <main className="mx-auto max-w-4xl p-6 space-y-10">
-      <header className="flex justify-between">
+    <main className="mx-auto max-w-3xl space-y-6 p-6">
+      <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Console Admin</h1>
-          <p className="text-sm text-zinc-500">OKR Management System — Powered by Straggia</p>
+          <p className="text-sm text-zinc-600">
+            OKR Management System — Powered by Straggia
+          </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-sm">{user?.email}</span>
-          <button onClick={logout} className="px-3 py-1 rounded-full bg-zinc-800 text-white">Sair</button>
+          <span className="text-sm text-zinc-600">{meEmail}</span>
+          <button
+            onClick={logout}
+            className="rounded-full bg-black px-4 py-2 text-white"
+          >
+            Sair
+          </button>
         </div>
       </header>
 
       {/* Criar cliente */}
-      <section className="rounded-2xl border p-4 space-y-3">
-        <h2 className="font-semibold">Criar cliente</h2>
-        <div className="flex gap-3">
-          <input
-            className="flex-1 rounded-xl border px-3 py-2"
+      <Section title="Criar cliente">
+        <form onSubmit={onCreateClient} className="flex gap-3">
+          <Input
             placeholder="Nome do cliente"
-            value={clientName}
-            onChange={e => setClientName(e.target.value)}
+            value={newClientName}
+            onChange={(e) => setNewClientName(e.target.value)}
           />
-          <button onClick={handleCreateClient} className="px-4 py-2 rounded-xl bg-black text-white">
+          <button
+            type="submit"
+            className="whitespace-nowrap rounded-md bg-black px-4 py-2 text-white"
+          >
             Adicionar
           </button>
-        </div>
-      </section>
+        </form>
+      </Section>
 
-      {/* Criar/Convidar usuário */}
-      <section className="rounded-2xl border p-4 space-y-3">
-        <h2 className="font-semibold">Criar/Convidar usuário</h2>
-        <div className="flex gap-3">
-          <input
-            className="flex-1 rounded-xl border px-3 py-2"
+      {/* Criar / convidar usuário */}
+      <Section title="Criar/Convidar usuário">
+        <form onSubmit={onInviteUser} className="flex gap-3">
+          <Input
+            type="email"
             placeholder="email@dominio.com"
-            value={newUserEmail}
-            onChange={e => setNewUserEmail(e.target.value)}
+            value={inviteEmail}
+            onChange={(e) => setInviteEmail(e.target.value)}
           />
           <select
-            className="rounded-xl border px-3 py-2"
-            value={newUserRole}
-            onChange={e => setNewUserRole(e.target.value as Role)}
+            className="rounded-md border border-zinc-300 px-3 py-2"
+            value={inviteRole}
+            onChange={(e) => setInviteRole(e.target.value as Role)}
           >
             <option value="admin">admin</option>
             <option value="editor">editor</option>
             <option value="viewer">viewer</option>
           </select>
-          <button onClick={handleCreateUser} className="px-4 py-2 rounded-xl bg-black text-white">
+          <button
+            type="submit"
+            className="whitespace-nowrap rounded-md bg-black px-4 py-2 text-white"
+          >
             Salvar
           </button>
-        </div>
-        <p className="text-xs text-zinc-500">
-          Cria/atualiza um registro em <code>/users</code>. Quando a pessoa logar com esse e-mail, o registro será usado.
+        </form>
+        <p className="mt-2 text-xs text-zinc-500">
+          Cria um registro em <code>/users</code>. Quando a pessoa logar com esse
+          e-mail, manteremos este registro.
         </p>
-      </section>
+      </Section>
 
-      {/* Dar acesso de cliente a usuário */}
-      <section className="rounded-2xl border p-4 space-y-3">
-        <h2 className="font-semibold">Dar acesso de Cliente → Usuário</h2>
-        <div className="flex gap-3">
+      {/* Conceder acesso cliente → usuário */}
+      <Section title="Dar acesso de Cliente → Usuário">
+        <form onSubmit={onGrantAccess} className="flex flex-col gap-3 md:flex-row">
           <select
-            className="flex-1 rounded-xl border px-3 py-2"
-            value={selectedUserEmail}
-            onChange={e => setSelectedUserEmail(e.target.value)}
+            className="flex-1 rounded-md border border-zinc-300 px-3 py-2"
+            value={selectedUserId}
+            onChange={(e) => setSelectedUserId(e.target.value)}
           >
             <option value="">Selecione usuário…</option>
-            {users.map(u => (
-              <option key={u.id} value={u.email}>{u.email}</option>
+            {sortedUsers.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.email} ({u.role})
+              </option>
             ))}
           </select>
 
           <select
-            className="flex-1 rounded-xl border px-3 py-2"
+            className="flex-1 rounded-md border border-zinc-300 px-3 py-2"
             value={selectedClientId}
-            onChange={e => setSelectedClientId(e.target.value)}
+            onChange={(e) => setSelectedClientId(e.target.value)}
           >
             <option value="">Selecione cliente…</option>
-            {clients.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+            {sortedClients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
             ))}
           </select>
 
-          <button onClick={handleGrantAccess} className="px-4 py-2 rounded-xl bg-black text-white">
+          <button
+            type="submit"
+            className="whitespace-nowrap rounded-md bg-black px-4 py-2 text-white"
+          >
             Conceder
           </button>
-        </div>
-      </section>
+        </form>
+      </Section>
 
       {/* Listas simples */}
-      <section className="rounded-2xl border p-4">
-        <h3 className="font-semibold mb-3">Clientes</h3>
-        <ul className="list-disc pl-6">
-          {clients.map(c => <li key={c.id}>{c.name} <span className="text-xs text-zinc-500">({c.id})</span></li>)}
+      <Section title="Clientes">
+        <ul className="list-disc space-y-1 pl-6">
+          {sortedClients.map((c) => (
+            <li key={c.id}>
+              <span className="font-medium">{c.name}</span>{" "}
+              <span className="text-xs text-zinc-500">({c.id})</span>
+            </li>
+          ))}
+          {sortedClients.length === 0 && (
+            <li className="list-none text-sm text-zinc-500">Nenhum cliente criado.</li>
+          )}
         </ul>
-      </section>
+      </Section>
 
-      <section className="rounded-2xl border p-4">
-        <h3 className="font-semibold mb-3">Usuários</h3>
-        <ul className="list-disc pl-6">
-          {users.map(u => <li key={u.id}>{u.email}</li>)}
+      <Section title="Usuários">
+        <ul className="list-disc space-y-1 pl-6">
+          {sortedUsers.map((u) => (
+            <li key={u.id}>
+              <span className="font-medium">{u.email}</span>{" "}
+              <span className="text-xs text-zinc-500">
+                — {u.role} · {u.clientAccess?.length ?? 0} clientes
+              </span>
+            </li>
+          ))}
+          {sortedUsers.length === 0 && (
+            <li className="list-none text-sm text-zinc-500">Nenhum usuário cadastrado.</li>
+          )}
         </ul>
-      </section>
+      </Section>
     </main>
   );
 }

@@ -6,7 +6,6 @@ import {
   getDoc,
   getDocs,
   serverTimestamp,
-  Firestore,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
@@ -54,8 +53,11 @@ export async function listUsers(): Promise<AppUser[]> {
   }));
 }
 
-/** Cria registro de usuário por e-mail (antes de logar) */
-export async function upsertUserByEmail(email: string, role: Role = "viewer"): Promise<string> {
+/** Cria um registro de usuário pré-login usando ID aleatório */
+export async function upsertUserByEmail(
+  email: string,
+  role: Role = "viewer"
+): Promise<string> {
   const ref = doc(collection(db, "users"));
   const payload: AppUserData = {
     email: email.toLowerCase(),
@@ -75,8 +77,8 @@ export async function setUserAccess(
   const ref = doc(db, "users", userId);
   const cur = await getDoc(ref);
   if (!cur.exists()) throw new Error("Usuário não encontrado");
-  const merged: Partial<AppUserData> = { ...(cur.data() as AppUserData), ...params };
-  await setDoc(ref, merged, { merge: true });
+
+  await setDoc(ref, params, { merge: true });
 }
 
 // -------- CLIENTS --------
@@ -105,11 +107,9 @@ export async function grantClientAccess(userId: string, clientId: string): Promi
   const ref = doc(db, "users", userId);
   const cur = await getDoc(ref);
   if (!cur.exists()) throw new Error("Usuário não encontrado");
+
   const data = cur.data() as AppUserData;
-  const set = new Set<string>([...(data.clientAccess || []), clientId]);
-  await setDoc(
-    ref,
-    { ...data, clientAccess: Array.from(set) },
-    { merge: true }
-  );
+  const next = Array.from(new Set([...(data.clientAccess || []), clientId]));
+
+  await setDoc(ref, { clientAccess: next }, { merge: true });
 }

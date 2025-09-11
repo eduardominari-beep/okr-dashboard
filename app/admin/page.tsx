@@ -1,108 +1,102 @@
 "use client";
-
 import { useEffect, useState } from "react";
-import { useAuth } from "../auth-provider";
+import { db } from "@/lib/firebase";
 import {
-  createClient,
-  listClients,
-  listUsers,
-  upsertUserByEmail,
-  grantClientAccess,
-  type Client,
-  type AppUser,
-  type Role,
-} from "@/lib/firestore";
-import type { ChangeEvent } from "react";
+  addDoc, setDoc, doc, getDocs, collection, query, where,
+} from "firebase/firestore";
+import { useAuth } from "../auth-provider";
+
+type Role = "admin" | "editor" | "viewer";
 
 export default function AdminPage() {
-  const { user, isSuperadmin, logout } = useAuth();
-  const [clients, setClients] = useState<Client[]>([]);
-  const [users, setUsers] = useState<AppUser[]>([]);
+  const { user, logout } = useAuth();
 
+  // inputs
   const [clientName, setClientName] = useState("");
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<Role>("viewer");
-  const [linkUserId, setLinkUserId] = useState<string>("");
-  const [linkClientId, setLinkClientId] = useState<string>("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserRole, setNewUserRole] = useState<Role>("admin");
 
+  // listas
+  const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
+  const [users, setUsers] = useState<{ id: string; email: string; role?: Role }[]>([]);
+
+  const [selectedUserEmail, setSelectedUserEmail] = useState("");
+  const [selectedClientId, setSelectedClientId] = useState("");
+
+  // carregar listas
   useEffect(() => {
-    if (!user) return;
     (async () => {
-      setClients(await listClients());
-      setUsers(await listUsers());
-    })();
-  }, [user]);
+      const cs = await getDocs(collection(db, "clients"));
+      setClients(cs.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
 
-  if (!user) {
-    return (
-      <main className="min-h-screen flex items-center justify-center">
-        <p>Você não está logado.</p>
-      </main>
-    );
-  }
-  if (!isSuperadmin) {
-    return (
-      <main className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <h1 className="text-xl font-bold mb-2">Acesso negado</h1>
-          <p>Somente superadmin pode acessar o Console Admin.</p>
-          <button onClick={logout} className="mt-4 px-4 py-2 rounded-2xl bg-zinc-800 text-white">
-            Sair
-          </button>
-        </div>
-      </main>
-    );
-  }
+      const us = await getDocs(collection(db, "users"));
+      setUsers(us.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
+    })();
+  }, []);
 
   async function handleCreateClient() {
-    if (!clientName.trim() || !user?.uid) return;
-    await createClient(clientName.trim(), user.uid);
+    if (!clientName.trim()) return;
+    await addDoc(collection(db, "clients"), {
+      name: clientName.trim(),
+      createdAt: Date.now(),
+      createdBy: user?.email || "unknown",
+    });
     setClientName("");
-    setClients(await listClients());
+    // refresh
+    const cs = await getDocs(collection(db, "clients"));
+    setClients(cs.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
   }
 
-  async function handleInviteUser() {
-    if (!inviteEmail.trim()) return;
-    await upsertUserByEmail(inviteEmail.trim().toLowerCase(), inviteRole);
-    setInviteEmail("");
-    setUsers(await listUsers());
+  async function handleCreateUser() {
+    const email = newUserEmail.trim().toLowerCase();
+    if (!email) return;
+    // cria/atualiza o doc do user (convite simples)
+    await setDoc(doc(db, "users", email), {
+      email,
+      defaultRole: newUserRole,
+      createdAt: Date.now(),
+    }, { merge: true });
+    setNewUserEmail("");
+    // refresh
+    const us = await getDocs(collection(db, "users"));
+    setUsers(us.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
   }
 
   async function handleGrantAccess() {
-    if (!linkUserId || !linkClientId) return;
-    await grantClientAccess(linkUserId, linkClientId);
-    setUsers(await listUsers());
+    if (!selectedUserEmail || !selectedClientId) return;
+    const email = selectedUserEmail.toLowerCase();
+    const memId = `${email}_${selectedClientId}`;
+    await setDoc(doc(db, "memberships", memId), {
+      userEmail: email,
+      clientId: selectedClientId,
+      role: "admin", // ou escolha via UI
+      createdAt: Date.now(),
+    }, { merge: true });
+    alert("Acesso concedido!");
   }
 
-  const onChangeClientName = (e: ChangeEvent<HTMLInputElement>) => setClientName(e.currentTarget.value);
-  const onChangeInviteEmail = (e: ChangeEvent<HTMLInputElement>) => setInviteEmail(e.currentTarget.value);
-  const onChangeInviteRole = (e: ChangeEvent<HTMLSelectElement>) => setInviteRole(e.currentTarget.value as Role);
-  const onChangeLinkUserId = (e: ChangeEvent<HTMLSelectElement>) => setLinkUserId(e.currentTarget.value);
-  const onChangeLinkClientId = (e: ChangeEvent<HTMLSelectElement>) => setLinkClientId(e.currentTarget.value);
-
   return (
-    <main className="p-6 max-w-4xl mx-auto flex flex-col gap-8">
-      <header className="flex items-center justify-between">
+    <main className="mx-auto max-w-4xl p-6 space-y-10">
+      <header className="flex justify-between">
         <div>
           <h1 className="text-2xl font-bold">Console Admin</h1>
           <p className="text-sm text-zinc-500">OKR Management System — Powered by Straggia</p>
         </div>
-        <div className="text-right">
-          <p className="text-sm">{user.email}</p>
-          <button onClick={logout} className="text-sm px-3 py-1 rounded-xl bg-zinc-800 text-white mt-1">
-            Sair
-          </button>
+        <div className="flex items-center gap-3">
+          <span className="text-sm">{user?.email}</span>
+          <button onClick={logout} className="px-3 py-1 rounded-full bg-zinc-800 text-white">Sair</button>
         </div>
       </header>
 
-      <section className="p-4 rounded-2xl border">
-        <h2 className="font-semibold mb-3">Criar cliente</h2>
-        <div className="flex gap-2">
+      {/* Criar cliente */}
+      <section className="rounded-2xl border p-4 space-y-3">
+        <h2 className="font-semibold">Criar cliente</h2>
+        <div className="flex gap-3">
           <input
-            value={clientName}
-            onChange={onChangeClientName}
+            className="flex-1 rounded-xl border px-3 py-2"
             placeholder="Nome do cliente"
-            className="flex-1 px-3 py-2 rounded-xl border"
+            value={clientName}
+            onChange={e => setClientName(e.target.value)}
           />
           <button onClick={handleCreateClient} className="px-4 py-2 rounded-xl bg-black text-white">
             Adicionar
@@ -110,47 +104,57 @@ export default function AdminPage() {
         </div>
       </section>
 
-      <section className="p-4 rounded-2xl border">
-        <h2 className="font-semibold mb-3">Criar/Convidar usuário</h2>
-        <div className="flex gap-2">
+      {/* Criar/Convidar usuário */}
+      <section className="rounded-2xl border p-4 space-y-3">
+        <h2 className="font-semibold">Criar/Convidar usuário</h2>
+        <div className="flex gap-3">
           <input
-            value={inviteEmail}
-            onChange={onChangeInviteEmail}
+            className="flex-1 rounded-xl border px-3 py-2"
             placeholder="email@dominio.com"
-            className="flex-1 px-3 py-2 rounded-xl border"
+            value={newUserEmail}
+            onChange={e => setNewUserEmail(e.target.value)}
           />
-          <select value={inviteRole} onChange={onChangeInviteRole} className="px-3 py-2 rounded-xl border">
+          <select
+            className="rounded-xl border px-3 py-2"
+            value={newUserRole}
+            onChange={e => setNewUserRole(e.target.value as Role)}
+          >
             <option value="admin">admin</option>
             <option value="editor">editor</option>
             <option value="viewer">viewer</option>
           </select>
-          <button onClick={handleInviteUser} className="px-4 py-2 rounded-xl bg-black text-white">
+          <button onClick={handleCreateUser} className="px-4 py-2 rounded-xl bg-black text-white">
             Salvar
           </button>
         </div>
-        <p className="text-xs text-zinc-500 mt-2">
-          Cria um registro em <code>/users</code>. Quando a pessoa logar com esse e-mail, manteremos este registro.
+        <p className="text-xs text-zinc-500">
+          Cria/atualiza um registro em <code>/users</code>. Quando a pessoa logar com esse e-mail, o registro será usado.
         </p>
       </section>
 
-      <section className="p-4 rounded-2xl border">
-        <h2 className="font-semibold mb-3">Dar acesso de Cliente → Usuário</h2>
-        <div className="flex gap-2">
-          <select value={linkUserId} onChange={onChangeLinkUserId} className="px-3 py-2 rounded-xl border flex-1">
+      {/* Dar acesso de cliente a usuário */}
+      <section className="rounded-2xl border p-4 space-y-3">
+        <h2 className="font-semibold">Dar acesso de Cliente → Usuário</h2>
+        <div className="flex gap-3">
+          <select
+            className="flex-1 rounded-xl border px-3 py-2"
+            value={selectedUserEmail}
+            onChange={e => setSelectedUserEmail(e.target.value)}
+          >
             <option value="">Selecione usuário…</option>
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.email} ({u.role})
-              </option>
+            {users.map(u => (
+              <option key={u.id} value={u.email}>{u.email}</option>
             ))}
           </select>
 
-          <select value={linkClientId} onChange={onChangeLinkClientId} className="px-3 py-2 rounded-xl border flex-1">
+          <select
+            className="flex-1 rounded-xl border px-3 py-2"
+            value={selectedClientId}
+            onChange={e => setSelectedClientId(e.target.value)}
+          >
             <option value="">Selecione cliente…</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
+            {clients.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
 
@@ -160,35 +164,18 @@ export default function AdminPage() {
         </div>
       </section>
 
-      <section className="p-4 rounded-2xl border">
-        <h2 className="font-semibold mb-3">Clientes</h2>
-        <ul className="text-sm grid gap-2">
-          {clients.map((c) => (
-            <li key={c.id} className="rounded-lg border px-3 py-2 flex items-center justify-between">
-              <span>{c.name}</span>
-              <code className="text-xs text-zinc-500">{c.id}</code>
-            </li>
-          ))}
+      {/* Listas simples */}
+      <section className="rounded-2xl border p-4">
+        <h3 className="font-semibold mb-3">Clientes</h3>
+        <ul className="list-disc pl-6">
+          {clients.map(c => <li key={c.id}>{c.name} <span className="text-xs text-zinc-500">({c.id})</span></li>)}
         </ul>
       </section>
 
-      <section className="p-4 rounded-2xl border">
-        <h2 className="font-semibold mb-3">Usuários</h2>
-        <ul className="text-sm grid gap-2">
-          {users.map((u) => (
-            <li key={u.id} className="rounded-lg border px-3 py-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-medium">{u.email}</div>
-                  <div className="text-xs text-zinc-500">role: {u.role}</div>
-                </div>
-                <code className="text-xs text-zinc-500">{u.id}</code>
-              </div>
-              <div className="text-xs text-zinc-500 mt-1">
-                clients: {u.clientAccess?.length ? u.clientAccess.join(", ") : "—"}
-              </div>
-            </li>
-          ))}
+      <section className="rounded-2xl border p-4">
+        <h3 className="font-semibold mb-3">Usuários</h3>
+        <ul className="list-disc pl-6">
+          {users.map(u => <li key={u.id}>{u.email}</li>)}
         </ul>
       </section>
     </main>

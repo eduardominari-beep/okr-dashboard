@@ -5,23 +5,18 @@ import Link from "next/link";
 import { useAuth } from "../auth-provider";
 import { getDoc, doc, getDocs, collection } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import type { AppUserData, ClientData } from "@/lib/firestore";
 
-type ClientData = {
-  name: string;
-  createdAt?: unknown;
-  createdBy?: string;
-  admins?: string[];
-};
 type Client = ClientData & { id: string };
 
 export default function ClientsPage() {
   const { user } = useAuth();
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
   const [clients, setClients] = useState<Client[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function load() {
+    void (async () => {
       try {
         if (!user) {
           setClients([]);
@@ -29,26 +24,24 @@ export default function ClientsPage() {
           return;
         }
 
-        // Lê o doc do usuário para pegar clientAccess e superadmin
         const uref = doc(db, "users", user.uid);
         const usnap = await getDoc(uref);
-        const udata = usnap.exists() ? (usnap.data() as any) : null;
-        const isSuper = !!udata?.superadmin;
-        const allowed: string[] = Array.isArray(udata?.clientAccess) ? udata.clientAccess : [];
+        const udata: AppUserData | undefined = usnap.exists() ? (usnap.data() as AppUserData) : undefined;
 
-        // Busca os clients
+        const isSuper = Boolean(udata?.superadmin);
+        const allowedIds = Array.isArray(udata?.clientAccess) ? udata!.clientAccess : [];
+
         const csnap = await getDocs(collection(db, "clients"));
         const all = csnap.docs.map((d) => ({ id: d.id, ...(d.data() as ClientData) }));
 
-        // Se superadmin, mostra todos. Caso contrário, só os autorizados
-        setClients(isSuper ? all : all.filter((c) => allowed.includes(c.id)));
-      } catch (e: any) {
-        setError(e?.message || "Falha ao carregar clientes");
+        setClients(isSuper ? all : all.filter((c) => allowedIds.includes(c.id)));
+      } catch (e) {
+        const err = e as { message?: string };
+        setError(err?.message ?? "Falha ao carregar clientes");
       } finally {
         setLoading(false);
       }
-    }
-    load();
+    })();
   }, [user]);
 
   if (!user) {
@@ -75,15 +68,16 @@ export default function ClientsPage() {
 
       <ul className="space-y-2">
         {clients.map((c) => (
-          <li key={c.id} className="rounded-lg border p-4 flex items-center justify-between">
+          <li key={c.id} className="flex items-center justify-between rounded-lg border p-4">
             <div>
               <div className="font-medium">{c.name}</div>
               <div className="text-xs text-zinc-500">{c.id}</div>
             </div>
-            {/* Assim que criarmos a página de projetos do cliente, esse link pode apontar para /clients/[id] */}
             <Link
-            href={`/clients/${c.id}`} className="rounded-md bg-black px-3 py-1.5 text-white">
-            Entrar
+              href={`/clients/${c.id}`}
+              className="rounded-md bg-black px-3 py-1.5 text-white"
+            >
+              Entrar
             </Link>
           </li>
         ))}

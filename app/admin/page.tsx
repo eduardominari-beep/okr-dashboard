@@ -73,36 +73,55 @@ export default function AdminPage() {
   );
 
   // ---- Actions ----
-  async function onCreateClient(e: FormEvent) {
-    e.preventDefault();
-    const name = newClientName.trim();
-    if (!name || !user) return; // garante TS e runtime
+
+ async function onCreateClient(e: FormEvent) {
+  e.preventDefault();
+  const name = newClientName.trim();
+  if (!name) return;
+  try {
+    if (!user) throw new Error("Faça login");
     await createClient(name, user.uid);
     setNewClientName("");
     const c = await listClients();
     setClients(c);
+    alert("Cliente criado!");
+  } catch (err: any) {
+    console.error("createClient error:", err);
+    alert("Erro ao criar cliente: " + (err?.message || err));
   }
+}
 
-  async function onInviteUser(e: FormEvent) {
-    e.preventDefault();
-    const email = inviteEmail.trim().toLowerCase();
-    if (!email) return;
+ async function onInviteUser(e: FormEvent) {
+  e.preventDefault();
+  const email = inviteEmail.trim().toLowerCase();
+  if (!email) return;
+  try {
     await upsertUserByEmail(email, inviteRole);
     setInviteEmail("");
     const u = await listUsers();
     setUsers(u);
+    alert("Usuário registrado (pré-login).");
+  } catch (err: any) {
+    console.error("upsertUserByEmail error:", err);
+    alert("Erro ao salvar usuário: " + (err?.message || err));
   }
+}
 
-  async function onGrantAccess(e: FormEvent) {
-    e.preventDefault();
-    if (!selectedUserId || !selectedClientId) return;
+async function onGrantAccess(e: FormEvent) {
+  e.preventDefault();
+  if (!selectedUserId || !selectedClientId) return;
+  try {
     await grantClientAccess(selectedUserId, selectedClientId);
     setSelectedUserId("");
     setSelectedClientId("");
     const u = await listUsers();
     setUsers(u);
+    alert("Acesso concedido!");
+  } catch (err: any) {
+    console.error("grantClientAccess error:", err);
+    alert("Erro ao conceder acesso: " + (err?.message || err));
   }
-
+}
   // ---- Render com checagem de acesso (depois dos hooks) ----
   if (!user || !isSuperadmin) {
     return (

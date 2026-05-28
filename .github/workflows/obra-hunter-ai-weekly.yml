@@ -1,0 +1,128 @@
+name: Obra Hunter AI weekly leads
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        default: fixture
+        type: choice
+        options:
+          - fixture
+          - live
+  schedule:
+    - cron: "0 10 * * 1"
+  push:
+    paths:
+      - "obra-hunter-ai/**"
+      - ".github/workflows/obra-hunter-ai-weekly.yml"
+
+jobs:
+  collect-and-email:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: obra-hunter-ai
+    env:
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_FROM: ${{ secrets.SMTP_FROM }}
+      EMAIL_TO: eduardo.minari@gmail.com
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: obra-hunter-ai/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Prepare run metadata
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ]; then MODE="live"; fi
+          if [ "${{ github.event_name }}" = "push" ]; then MODE="fixture"; fi
+          RUN_ID="$MODE-$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
+          echo "MODE=$MODE" >> "$GITHUB_ENV"
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          echo "RUN_DIR=data/runs/$RUN_ID" >> "$GITHUB_ENV"
+
+      - name: Collect private construction leads
+        run: |
+          set +e
+          npm run collect -- --mode="$MODE" --run-id="$RUN_ID" --out-dir="$RUN_DIR"
+          COLLECT_EXIT=$?
+          echo "COLLECT_EXIT=$COLLECT_EXIT" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Send weekly email
+        if: always() && env.SMTP_SERVER != '' && env.SMTP_USERNAME != '' && env.SMTP_PASSWORD != '' && env.SMTP_FROM != ''
+        run: |
+          python3 - <<'PY'
+          import mimetypes
+          import os
+          import smtplib
+          from email.message import EmailMessage
+          from pathlib import Path
+
+          run_dir = Path(os.environ["RUN_DIR"])
+          msg = EmailMessage()
+          msg["To"] = os.environ["EMAIL_TO"]
+          msg["From"] = os.environ["SMTP_FROM"]
+          msg["Subject"] = (run_dir / "email-subject.txt").read_text(encoding="utf-8").strip()
+          msg.set_content((run_dir / "email-body.txt").read_text(encoding="utf-8"))
+
+          for name in ["leads.csv", "ranked-leads.json", "summary.md", "operational-status.json"]:
+            path = run_dir / name
+            if not path.exists():
+              continue
+            ctype, encoding = mimetypes.guess_type(str(path))
+            if ctype is None or encoding is not None:
+              ctype = "application/octet-stream"
+            maintype, subtype = ctype.split("/", 1)
+            msg.add_attachment(path.read_bytes(), maintype=maintype, subtype=subtype, filename=name)
+
+          server = os.environ["SMTP_SERVER"]
+          port = int(os.environ.get("SMTP_PORT") or "587")
+          username = os.environ["SMTP_USERNAME"]
+          password = os.environ["SMTP_PASSWORD"]
+
+          if port == 465:
+            with smtplib.SMTP_SSL(server, port) as smtp:
+              smtp.login(username, password)
+              smtp.send_message(msg)
+          else:
+            with smtplib.SMTP(server, port) as smtp:
+              smtp.starttls()
+              smtp.login(username, password)
+              smtp.send_message(msg)
+          PY
+
+      - name: Email not configured
+        if: always() && (env.SMTP_SERVER == '' || env.SMTP_USERNAME == '' || env.SMTP_PASSWORD == '' || env.SMTP_FROM == '')
+        run: |
+          echo "Email not sent because SMTP secrets are not configured."
+          echo "Required: SMTP_SERVER, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM. Optional: SMTP_PORT."
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: obra-hunter-ai-run-${{ env.RUN_ID }}
+          path: obra-hunter-ai/data/runs/
+          if-no-files-found: warn
+
+      - name: Fail workflow if live collection failed
+        if: always() && env.COLLECT_EXIT != '0'
+        run: exit 1

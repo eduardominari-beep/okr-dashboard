@@ -83,21 +83,42 @@ def enrich(args: argparse.Namespace) -> dict:
     start = max(0, int(args.enrich_offset or 0))
     end = start + int(args.enrich_limit) if args.enrich_limit else None
     to_process = pending[start:end]
-    freshly_enriched, enrichment_report = enrich_schools(to_process, mode=args.mode)
-    for enriched_record in freshly_enriched:
-        cache[school_cache_key(enriched_record)] = public_enrichment_only(enriched_record)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    write_json(
-        cache_path,
-        {
-            "version": 1,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "base_records": len(base_records),
-            "cached_records": len(cache),
-            "pending_records": max(0, len(base_records) - len(cache)),
-            "items": cache,
-        },
+
+    print(
+        "Enrichment queue: "
+        f"{len(to_process)} to process now, {len(cache)} already cached, "
+        f"{max(0, len(base_records) - len(cache))} pending total.",
+        flush=True,
     )
+
+    freshly_enriched = []
+    errors = []
+    for position, record in enumerate(to_process, start=1):
+        school = record.get("school") or record.get("nome_escola") or "escola sem nome"
+        municipality = record.get("municipality") or record.get("municipio") or ""
+        print(f"[{position}/{len(to_process)}] Enriching: {school} ({municipality})", flush=True)
+        enriched_batch, batch_report = enrich_schools([record], mode=args.mode)
+        freshly_enriched.extend(enriched_batch)
+        errors.extend(batch_report.get("errors", []))
+        for enriched_record in enriched_batch:
+            cache[school_cache_key(enriched_record)] = public_enrichment_only(enriched_record)
+        write_enrichment_cache(cache_path, len(base_records), cache, args.enrich_order)
+        print(
+            f"  saved progress: {len(cache)} cached, "
+            f"{max(0, len(base_records) - len(cache))} pending.",
+            flush=True,
+        )
+
+    if not to_process:
+        write_enrichment_cache(cache_path, len(base_records), cache, args.enrich_order)
+
+    enrichment_report = {
+        "name": "public-enrichment",
+        "ok": not errors,
+        "records": len(freshly_enriched),
+        "errors": errors[:20],
+    }
     enriched = []
     for record in base_records:
         key = school_cache_key(record)
@@ -342,6 +363,21 @@ def school_cache_key(record: dict) -> str:
 
 def public_enrichment_only(record: dict) -> dict:
     return {key: record.get(key) for key in ENRICHMENT_CACHE_FIELDS if key in record}
+
+
+def write_enrichment_cache(path: Path, base_records_count: int, cache: dict, enrich_order: str) -> None:
+    write_json(
+        path,
+        {
+            "version": 1,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "base_records": base_records_count,
+            "cached_records": len(cache),
+            "pending_records": max(0, base_records_count - len(cache)),
+            "enrich_order": enrich_order,
+            "items": cache,
+        },
+    )
 
 
 def save_state(path: Path, state: dict) -> None:

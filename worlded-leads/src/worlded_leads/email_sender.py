@@ -9,14 +9,15 @@ from pathlib import Path
 
 
 ATTACHMENTS = [
-    "worlded-leads.csv",
-    "worlded-leads.html",
-    "worlded-leads.json",
+    "worlded_leads.csv",
+    "worlded_leads.html",
+    "worlded_leads.json",
     "new-leads.csv",
     "new-leads.json",
     "long-list.csv",
     "long-list.json",
     "summary.md",
+    "summary.txt",
     "operational-status.json",
 ]
 

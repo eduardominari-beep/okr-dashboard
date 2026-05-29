@@ -6,11 +6,11 @@ on:
       mode:
         description: "Run mode"
         required: true
-        default: fixture
+        default: live
         type: choice
         options:
-          - fixture
           - live
+          - fixture
   schedule:
     - cron: "0 10 * * 1"
   push:
@@ -25,6 +25,7 @@ jobs:
       run:
         working-directory: obra-hunter-ai
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
       SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -38,7 +39,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: obra-hunter-ai/package-lock.json
 

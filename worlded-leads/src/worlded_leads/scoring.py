@@ -9,6 +9,7 @@ def score_school(record: dict) -> dict:
     decision = infer_decision(record)
     has_existing_product = bool(record.get("has_ib") or record.get("has_ap") or record.get("has_dual_diploma"))
     has_bilingual = bool(record.get("has_bilingual_program"))
+    centralized = bool(record.get("is_centralized_network") or decision["school_type"] in {"grupo grande", "franquia/rede centralizada"})
 
     score = 0
     score += stage_points(enrollment)
@@ -79,9 +80,34 @@ def enrollment_summary(record: dict) -> dict:
         "students_high_school_2023": high_school[2023],
         "students_high_school_2024": high_school[2024],
         "students_high_school_2025": high_school[2025],
+        "alunos_total_2020": totals[2020],
+        "alunos_total_2021": totals[2021],
+        "alunos_total_2022": totals[2022],
+        "alunos_total_2023": totals[2023],
+        "alunos_total_2024": totals[2024],
+        "alunos_total_2025": totals[2025],
+        "fund2_2020": fundamental_ii[2020],
+        "fund2_2021": fundamental_ii[2021],
+        "fund2_2022": fundamental_ii[2022],
+        "fund2_2023": fundamental_ii[2023],
+        "fund2_2024": fundamental_ii[2024],
+        "fund2_2025": fundamental_ii[2025],
+        "medio_2020": high_school[2020],
+        "medio_2021": high_school[2021],
+        "medio_2022": high_school[2022],
+        "medio_2023": high_school[2023],
+        "medio_2024": high_school[2024],
+        "medio_2025": high_school[2025],
         "student_delta_abs_2020_2025": delta_abs,
         "student_delta_pct_2020_2025": delta_pct,
+        "variacao_total_abs_2020_2025": delta_abs,
+        "variacao_total_pct_2020_2025": delta_pct,
+        "variacao_fund2_abs_2020_2025": variation_abs(fundamental_ii),
+        "variacao_fund2_pct_2020_2025": variation_pct(fundamental_ii),
+        "variacao_medio_abs_2020_2025": variation_abs(high_school),
+        "variacao_medio_pct_2020_2025": variation_pct(high_school),
         "trend": trend,
+        "tendencia_total": trend,
         "latest_relevant_students": latest_f2 + latest_em,
     }
 
@@ -201,6 +227,22 @@ def value_for(enrollments: dict, year: int, field: str) -> int | None:
     data = enrollments.get(str(year)) or enrollments.get(year) or {}
     value = data.get(field)
     return int(value) if isinstance(value, (int, float)) else None
+
+
+def variation_abs(values: dict[int, int | None]) -> int | None:
+    first_year, first_value = first_available(values)
+    last_year, last_value = last_available(values)
+    if first_value is None or last_value is None or first_year == last_year:
+        return None
+    return last_value - first_value
+
+
+def variation_pct(values: dict[int, int | None]) -> float | None:
+    first_year, first_value = first_available(values)
+    last_year, last_value = last_available(values)
+    if first_value is None or last_value is None or first_year == last_year or first_value == 0:
+        return None
+    return round(((last_value - first_value) / first_value) * 100, 1)
 
 
 def first_available(values: dict[int, int | None]) -> tuple[int | None, int | None]:

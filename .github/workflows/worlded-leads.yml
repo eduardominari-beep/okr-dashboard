@@ -1,0 +1,103 @@
+name: WorldEd Dual Diploma leads
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        default: live
+        type: choice
+        options:
+          - live
+          - fixture
+  schedule:
+    - cron: "0 11 * * 1"
+
+jobs:
+  collect-and-email:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worlded-leads
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT || '587' }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_FROM: ${{ secrets.SMTP_FROM }}
+      LEADS_EMAIL_TO: ${{ secrets.LEADS_EMAIL_TO || 'eduardo.minari@gmail.com' }}
+      BIGQUERY_PROJECT_ID: ${{ secrets.BIGQUERY_PROJECT_ID }}
+      GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: worlded-leads/requirements.txt
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Test
+        run: PYTHONPATH=src python -m unittest discover -s tests
+
+      - name: Prepare run metadata
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ]; then MODE="live"; fi
+          RUN_ID="$MODE-$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
+          echo "MODE=$MODE" >> "$GITHUB_ENV"
+          echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+          echo "RUN_DIR=data/outputs/$RUN_ID" >> "$GITHUB_ENV"
+          echo "STATE_FILE=.lead-state/state.json" >> "$GITHUB_ENV"
+
+      - name: Restore WorldEd memory
+        uses: actions/cache/restore@v4
+        with:
+          path: worlded-leads/.lead-state
+          key: worlded-leads-state-${{ github.run_id }}
+          restore-keys: |
+            worlded-leads-state-
+
+      - name: Collect WorldEd leads
+        run: |
+          set +e
+          PYTHONPATH=src python -m worlded_leads.main collect --mode="$MODE" --run-id="$RUN_ID" --out-dir="$RUN_DIR" --state-file="$STATE_FILE"
+          COLLECT_EXIT=$?
+          echo "COLLECT_EXIT=$COLLECT_EXIT" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Save WorldEd memory
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: worlded-leads/.lead-state
+          key: worlded-leads-state-${{ github.run_id }}
+
+      - name: Send WorldEd email
+        if: always() && env.SMTP_SERVER != '' && env.SMTP_USERNAME != '' && env.SMTP_PASSWORD != '' && env.SMTP_FROM != ''
+        run: PYTHONPATH=src python -m worlded_leads.main send-email --run-dir="$RUN_DIR"
+
+      - name: Email not configured
+        if: always() && (env.SMTP_SERVER == '' || env.SMTP_USERNAME == '' || env.SMTP_PASSWORD == '' || env.SMTP_FROM == '')
+        run: |
+          echo "Email not sent because SMTP secrets are not configured."
+          echo "Required: SMTP_SERVER, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM. Optional: SMTP_PORT, LEADS_EMAIL_TO."
+
+      - name: Upload WorldEd artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worlded-leads-run-${{ env.RUN_ID }}
+          path: worlded-leads/data/outputs/
+          if-no-files-found: warn
+
+      - name: Fail workflow if live collection failed
+        if: always() && env.COLLECT_EXIT != '0'
+        run: exit 1

@@ -158,7 +158,12 @@ function reject(raw, reason, detail, detectedAt, signalType = null) {
 function dedupe(leads) {
   const kept = [];
   for (const lead of leads) {
-    const existing = kept.find((item) => norm(item.company_name) === norm(lead.company_name) && (!item.city || !lead.city || norm(item.city) === norm(lead.city)) && (item.signal_type === lead.signal_type || tokenSimilarity(item.title, lead.title) >= 0.35));
+    const existing = kept.find((item) => {
+      const sameCompany = norm(item.company_name) === norm(lead.company_name);
+      const sameCity = !item.city || !lead.city || norm(item.city) === norm(lead.city);
+      const sameAddress = item.address && lead.address && norm(item.address) === norm(lead.address);
+      return sameCompany && sameCity && (sameAddress || item.signal_type === lead.signal_type || tokenSimilarity(item.title, lead.title) >= 0.25);
+    });
     if (!existing) kept.push({ ...lead, duplicate_count: 0, merged_source_urls: uniq([lead.source_url]), merged_titles: uniq([lead.title]) });
     else {
       existing.duplicate_count += 1;

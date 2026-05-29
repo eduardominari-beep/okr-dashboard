@@ -84,7 +84,7 @@ jobs:
           key: consultoria-lead-hunter-state-${{ github.run_id }}
 
       - name: Send weekly email
-        if: always() && env.SMTP_SERVER != '' && env.SMTP_USERNAME != '' && env.SMTP_PASSWORD != '' && env.SMTP_FROM != ''
+        if: always() && github.event_name != 'push' && env.SMTP_SERVER != '' && env.SMTP_USERNAME != '' && env.SMTP_PASSWORD != '' && env.SMTP_FROM != ''
         run: |
           python3 - <<'PY'
           import mimetypes
@@ -127,7 +127,7 @@ jobs:
           PY
 
       - name: Email not configured
-        if: always() && (env.SMTP_SERVER == '' || env.SMTP_USERNAME == '' || env.SMTP_PASSWORD == '' || env.SMTP_FROM == '')
+        if: always() && github.event_name != 'push' && (env.SMTP_SERVER == '' || env.SMTP_USERNAME == '' || env.SMTP_PASSWORD == '' || env.SMTP_FROM == '')
         run: |
           echo "Email not sent because SMTP secrets are not configured."
           echo "Required: SMTP_SERVER, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM. Optional: SMTP_PORT."

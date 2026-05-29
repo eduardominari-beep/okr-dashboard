@@ -1,0 +1,15 @@
+{
+  "name": "consultoria-lead-hunter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Weekly lead hunter for consulting opportunities based on fresh business pain signals.",
+  "scripts": {
+    "collect": "node index.mjs collect",
+    "email": "node index.mjs email",
+    "test": "node index.mjs test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

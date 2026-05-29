@@ -11,8 +11,40 @@ on:
         options:
           - live
           - fixture
-  schedule:
-    - cron: "0 11 * * 1"
+      source:
+        description: "INEP source"
+        required: true
+        default: inep-zips
+        type: choice
+        options:
+          - inep-zips
+          - bigquery
+      scope:
+        description: "Territory"
+        required: true
+        default: grande-sp
+        type: choice
+        options:
+          - grande-sp
+          - state
+          - municipality
+          - all
+      uf:
+        description: "UF when scope=state"
+        required: false
+        default: SP
+      municipality:
+        description: "Municipality names when scope=municipality, comma-separated"
+        required: false
+        default: ""
+      municipality_code:
+        description: "IBGE municipality codes when scope=municipality, comma-separated"
+        required: false
+        default: ""
+      enrich_limit:
+        description: "How many pending schools to enrich in this run; 0 enriches all pending"
+        required: false
+        default: "300"
 
 jobs:
   collect-and-email:
@@ -28,6 +60,7 @@ jobs:
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       SMTP_FROM: ${{ secrets.SMTP_FROM }}
       LEADS_EMAIL_TO: ${{ secrets.LEADS_EMAIL_TO || 'eduardo.minari@gmail.com' }}
+      USE_BIGQUERY: ${{ secrets.USE_BIGQUERY || 'false' }}
       BIGQUERY_PROJECT_ID: ${{ secrets.BIGQUERY_PROJECT_ID }}
       GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS_JSON }}
     steps:
@@ -50,12 +83,38 @@ jobs:
       - name: Prepare run metadata
         run: |
           MODE="${{ github.event.inputs.mode }}"
+          SOURCE="${{ github.event.inputs.source }}"
+          SCOPE="${{ github.event.inputs.scope }}"
+          UF="${{ github.event.inputs.uf }}"
+          MUNICIPALITY="${{ github.event.inputs.municipality }}"
+          MUNICIPALITY_CODE="${{ github.event.inputs.municipality_code }}"
+          ENRICH_LIMIT="${{ github.event.inputs.enrich_limit }}"
           if [ -z "$MODE" ]; then MODE="live"; fi
+          if [ -z "$SCOPE" ]; then SCOPE="grande-sp"; fi
+          if [ -z "$UF" ]; then UF="SP"; fi
+          if [ -z "$ENRICH_LIMIT" ]; then ENRICH_LIMIT="300"; fi
+          if [ -z "$SOURCE" ]; then
+            if [ "$USE_BIGQUERY" = "true" ]; then
+              SOURCE="bigquery"
+            else
+              SOURCE="inep-zips"
+            fi
+          fi
+          if [ "$SOURCE" = "bigquery" ]; then
+            echo "USE_BIGQUERY=true" >> "$GITHUB_ENV"
+          fi
           RUN_ID="$MODE-$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
           echo "MODE=$MODE" >> "$GITHUB_ENV"
+          echo "SOURCE=$SOURCE" >> "$GITHUB_ENV"
+          echo "SCOPE=$SCOPE" >> "$GITHUB_ENV"
+          echo "UF=$UF" >> "$GITHUB_ENV"
+          echo "MUNICIPALITY=$MUNICIPALITY" >> "$GITHUB_ENV"
+          echo "MUNICIPALITY_CODE=$MUNICIPALITY_CODE" >> "$GITHUB_ENV"
+          echo "ENRICH_LIMIT=$ENRICH_LIMIT" >> "$GITHUB_ENV"
           echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
           echo "RUN_DIR=data/outputs/$RUN_ID" >> "$GITHUB_ENV"
           echo "STATE_FILE=.lead-state/state.json" >> "$GITHUB_ENV"
+          echo "ENRICHMENT_CACHE=.lead-state/public-enrichment-cache.json" >> "$GITHUB_ENV"
 
       - name: Restore WorldEd memory
         uses: actions/cache/restore@v4
@@ -68,8 +127,31 @@ jobs:
       - name: Collect WorldEd leads
         run: |
           set +e
-          PYTHONPATH=src python -m worlded_leads.main collect --mode="$MODE" --run-id="$RUN_ID" --out-dir="$RUN_DIR" --state-file="$STATE_FILE"
-          COLLECT_EXIT=$?
+          OFFLINE_FLAG="--offline"
+          if [ "$SOURCE" = "bigquery" ]; then
+            OFFLINE_FLAG=""
+          fi
+          GEO_ARGS=(--scope="$SCOPE" --uf="$UF")
+          if [ -n "$MUNICIPALITY" ]; then
+            GEO_ARGS+=(--municipality="$MUNICIPALITY")
+          fi
+          if [ -n "$MUNICIPALITY_CODE" ]; then
+            GEO_ARGS+=(--municipality-code="$MUNICIPALITY_CODE")
+          fi
+          PYTHONPATH=src python -m worlded_leads.main build-base $OFFLINE_FLAG "${GEO_ARGS[@]}"
+          BUILD_EXIT=$?
+          if [ "$BUILD_EXIT" -eq 0 ]; then
+            PYTHONPATH=src python -m worlded_leads.main enrich --mode="$MODE" --run-id="$RUN_ID" --cache-file="$ENRICHMENT_CACHE" --enrich-limit="$ENRICH_LIMIT" --enrich-order=priority
+            ENRICH_EXIT=$?
+          else
+            ENRICH_EXIT=$BUILD_EXIT
+          fi
+          if [ "$ENRICH_EXIT" -eq 0 ]; then
+            PYTHONPATH=src python -m worlded_leads.main report --mode="$MODE" --run-id="$RUN_ID" --out-dir="$RUN_DIR" --state-file="$STATE_FILE"
+            COLLECT_EXIT=$?
+          else
+            COLLECT_EXIT=$ENRICH_EXIT
+          fi
           echo "COLLECT_EXIT=$COLLECT_EXIT" >> "$GITHUB_ENV"
           exit 0
 

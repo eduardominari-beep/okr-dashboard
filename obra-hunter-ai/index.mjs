@@ -83,21 +83,152 @@ async function collect(args) {
 }
 
 async function collectLive() {
-  const queries = [];
-  const bases = ["expansao fabrica obra fachada", "nova unidade implantacao loja reforma fachada", "centro de distribuicao obra galpao", "retrofit sede corporativa obra", "adequacao hidraulica eletrica pintura obra civil"];
-  for (const base of bases) for (const city of TARGET_CITIES.slice(0, 8)) queries.push(`${base} \"${city.label}\"`);
-  const rawSignals = [];
   const sourceReports = [];
-  for (const query of queries) {
+  const rawSignals = [];
+  const collectors = [
+    ["google-news-rss", collectNewsSignals],
+    ["cetesb-public-solicitacoes", collectCetesbPublicSignals],
+    ["geosampa-wfs-licenciamento", collectGeoSampaSignals]
+  ];
+  for (const [name, fn] of collectors) {
     try {
-      const items = await fetchRss(query);
-      rawSignals.push(...items);
-      sourceReports.push({ name: `rss:${query}`, ok: true, records: items.length });
+      const records = await fn();
+      rawSignals.push(...records);
+      sourceReports.push({ name, ok: true, records: records.length });
     } catch (error) {
-      sourceReports.push({ name: `rss:${query}`, ok: false, records: 0, error: error.message });
+      sourceReports.push({ name, ok: false, records: 0, error: error.message });
     }
   }
   return { rawSignals, sourceReports };
+}
+
+async function collectNewsSignals() {
+  const priorityCities = TARGET_CITIES.slice(0, 12).map((city) => city.label);
+  const bases = [
+    "expansao fabrica obra fachada",
+    "nova unidade implantacao loja reforma fachada",
+    "centro de distribuicao obra galpao",
+    "retrofit sede corporativa obra",
+    "adequacao hidraulica eletrica pintura obra civil",
+    "gerente de obras facilities implantacao unidade",
+    "licenca de instalacao expansao industrial CETESB",
+    "shopping retrofit fachada esquadrias pintura",
+    "condominio logistico novo operador adequacao eletrica",
+    "nova loja fachada esquadrias pintura obra civil"
+  ];
+  const queries = [];
+  for (const base of bases) {
+    for (const city of priorityCities) queries.push(`${base} "${city}"`);
+  }
+  const batches = [];
+  for (const query of queries) {
+    try {
+      batches.push(...await fetchRss(query));
+    } catch {
+      // Individual query failures should not kill the whole news collector.
+    }
+  }
+  return batches;
+}
+
+async function collectCetesbPublicSignals() {
+  const url = "https://e.cetesb.sp.gov.br/portal-servicos-frontend/publico/solicitacao";
+  const html = await fetchText(url);
+  const text = stripHtml(decodeXml(html));
+  const rows = [...text.matchAll(/Nº solicitação:\s*([^|]+)\|\s*Nº processo:\s*([^|]*)\|\s*Data da solicitação:\s*([^|]+)\|\s*Objetos da solicitação:\s*([^|]+)\|\s*Interessado:\s*([^|]+)\|\s*Técnico responsável:\s*([^|]*)\|\s*Empreendimento:\s*([^|]*)\|\s*Status:\s*([^|]+)/g)];
+  return rows.slice(0, 40).map((match, index) => {
+    const [, requestNumber, processNumber, date, objects, interested, technician, enterprise, status] = match.map((item) => item.trim());
+    return {
+      id: `cetesb-${requestNumber || index}`,
+      title: `CETESB: ${objects} - ${interested}`,
+      text: `Solicitacao ambiental publica. Nº solicitacao: ${requestNumber}. Processo: ${processNumber}. Objeto: ${objects}. Interessado: ${interested}. Empreendimento: ${enterprise}. Status: ${status}.`,
+      company_name: interested,
+      city: inferCity(`${interested} ${enterprise} ${objects}`)?.label ?? "",
+      address: enterprise,
+      source_name: "CETESB consulta publica de solicitacoes",
+      source_url: url,
+      published_at: parseBrazilianDate(date),
+      detected_at: new Date().toISOString()
+    };
+  }).filter((record) => /licen[cç]a|instala[cç][aã]o|amplia[cç][aã]o|MCE|LP\/LI|viabilidade/i.test(`${record.title} ${record.text}`));
+}
+
+async function collectGeoSampaSignals() {
+  const endpoints = [
+    "https://wfs.geosampa.prefeitura.sp.gov.br/geoserver/ows",
+    "https://geosampa.prefeitura.sp.gov.br/geoserver/ows"
+  ];
+  const layerKeywords = /licenc|alvara|slce|sisacoe|aprova|obra/i;
+  const allRecords = [];
+  for (const endpoint of endpoints) {
+    let capabilities = "";
+    try {
+      capabilities = await fetchText(`${endpoint}?service=WFS&version=1.0.0&request=GetCapabilities`);
+    } catch {
+      continue;
+    }
+    const layerNames = [...capabilities.matchAll(/<Name>([^<]+)<\/Name>/g)]
+      .map((match) => match[1])
+      .filter((name) => layerKeywords.test(name))
+      .slice(0, 6);
+    for (const layerName of layerNames) {
+      try {
+        const url = `${endpoint}?service=WFS&version=1.0.0&request=GetFeature&typeName=${encodeURIComponent(layerName)}&maxFeatures=25&outputFormat=application/json`;
+        const json = JSON.parse(await fetchText(url));
+        const features = Array.isArray(json.features) ? json.features : [];
+        allRecords.push(...features.slice(0, 25).map((feature, index) => geoFeatureToSignal(feature, layerName, url, index)));
+      } catch {
+        // Try next layer; GeoSampa layers can vary by output format and permissions.
+      }
+    }
+  }
+  return allRecords.filter(Boolean);
+}
+
+function geoFeatureToSignal(feature, layerName, sourceUrl, index) {
+  const props = feature?.properties ?? {};
+  const values = Object.entries(props).map(([key, value]) => `${key}: ${value}`).join(" | ");
+  const company = pickProperty(props, [/interess/i, /propriet/i, /requer/i, /razao/i, /empresa/i, /nome/i]);
+  const address = pickProperty(props, [/endereco/i, /logradouro/i, /imovel/i, /sql/i]);
+  return {
+    id: `geosampa-${hash(layerName + index + values)}`,
+    title: `GeoSampa licenciamento: ${layerName}`,
+    text: `Camada oficial GeoSampa/WFS com possivel licenciamento ou obra. ${values}`,
+    company_name: company,
+    city: "Sao Paulo",
+    address,
+    source_name: "GeoSampa WFS licenciamento",
+    source_url: sourceUrl,
+    published_at: new Date().toISOString(),
+    detected_at: new Date().toISOString()
+  };
+}
+
+async function fetchText(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { "user-agent": "obra-hunter-ai/0.1" } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function pickProperty(props, patterns) {
+  for (const [key, value] of Object.entries(props)) {
+    if (value == null || value === "") continue;
+    if (patterns.some((pattern) => pattern.test(key))) return String(value);
+  }
+  return "";
+}
+
+function parseBrazilianDate(value) {
+  const match = String(value).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!match) return new Date().toISOString();
+  const [, day, month, year] = match;
+  return new Date(`${year}-${month}-${day}T12:00:00.000Z`).toISOString();
 }
 
 async function fetchRss(query) {

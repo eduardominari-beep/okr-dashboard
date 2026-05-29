@@ -1,6 +1,6 @@
-data/raw/
-data/processed/
-data/outputs/
+data/processed/*.parquet
+data/processed/*.json
+data/outputs/*
 .lead-state/
 .pytest_cache/
 __pycache__/

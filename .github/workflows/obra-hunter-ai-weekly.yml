@@ -13,10 +13,6 @@ on:
           - fixture
   schedule:
     - cron: "0 10 * * 1"
-  push:
-    paths:
-      - "obra-hunter-ai/**"
-      - ".github/workflows/obra-hunter-ai-weekly.yml"
 
 jobs:
   collect-and-email:

@@ -13,10 +13,6 @@ on:
           - fixture
   schedule:
     - cron: "0 10 * * 1"
-  push:
-    paths:
-      - "obra-hunter-ai/**"
-      - ".github/workflows/obra-hunter-ai-weekly.yml"
 
 jobs:
   collect-and-email:
@@ -53,7 +49,6 @@ jobs:
         run: |
           MODE="${{ github.event.inputs.mode }}"
           if [ -z "$MODE" ]; then MODE="live"; fi
-          if [ "${{ github.event_name }}" = "push" ]; then MODE="fixture"; fi
           RUN_ID="$MODE-$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
           echo "MODE=$MODE" >> "$GITHUB_ENV"
           echo "RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
@@ -66,6 +61,10 @@ jobs:
           COLLECT_EXIT=$?
           echo "COLLECT_EXIT=$COLLECT_EXIT" >> "$GITHUB_ENV"
           exit 0
+
+      - name: Enrich sales contacts and filters
+        if: always()
+        run: node enrich-output.mjs --run-dir="$RUN_DIR"
 
       - name: Send weekly email
         if: always() && env.SMTP_SERVER != '' && env.SMTP_USERNAME != '' && env.SMTP_PASSWORD != '' && env.SMTP_FROM != ''

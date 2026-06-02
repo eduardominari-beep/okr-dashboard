@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Radar semanal de oportunidades privadas de obra para vendas consultivas.",
   "scripts": {
-    "test": "node index.mjs test",
+    "test": "node index.mjs test && node contact-enrichment.mjs test && node --check enrich-output.mjs",
     "collect": "node index.mjs collect",
     "collect:fixture": "node index.mjs collect --mode=fixture",
     "collect:live": "node index.mjs collect --mode=live",

@@ -83,7 +83,7 @@ jobs:
           msg["Subject"] = (run_dir / "email-subject.txt").read_text(encoding="utf-8").strip()
           msg.set_content((run_dir / "email-body.txt").read_text(encoding="utf-8"))
 
-          for name in ["leads.csv", "research-backlog.csv", "ranked-leads.json", "summary.md", "operational-status.json"]:
+          for name in ["leads.csv", "research-backlog.csv", "contact-enrichment.json", "ranked-leads.json", "summary.md", "operational-status.json"]:
             path = run_dir / name
             if not path.exists():
               continue

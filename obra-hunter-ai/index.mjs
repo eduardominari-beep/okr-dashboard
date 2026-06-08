@@ -30,12 +30,14 @@ const PROCUREMENT = ["licitacao", "aviso de licitacao", "dispensa de licitacao",
 const PUBLIC_NOISE = ["recapeamento", "pavimentacao", "tapa buraco", "playground", "praca publica", "manutencao de praca", "zeladoria", "limpeza urbana", "sinalizacao viaria", "calcada publica", "drenagem urbana", "poda de arvore"];
 const GOVERNMENT = ["prefeitura", "governo do estado", "governo federal", "secretaria municipal", "secretaria estadual", "camara municipal", "autarquia", "fundacao municipal"];
 const PRIVATE = ["ltda", "s/a", "sa", "grupo", "rede", "industria", "industrial", "shopping", "condominio", "logistica", "empreendimentos", "incorporadora", "construtora", "company", "brasil"];
+const PREDICTIVE_CONTEXT = ["segundo semestre de 2026", "2o semestre de 2026", "2º semestre de 2026", "2027", "2028", "2029", "previsao", "previsão", "prevista", "previsto", "deve abrir", "vai abrir", "ira abrir", "irá abrir", "planeja abrir", "projeta abrir", "pretende abrir", "em implantacao", "em implantação", "em construcao", "em construção", "obra prevista", "obras previstas", "projeto aprovado", "licenca de construcao", "licenca de instalacao", "licença de instalação", "alvara", "aprova projeto"];
+const POST_WORK = ["inaugurou", "inaugurada", "inaugurado", "inaugura unidade", "abre unidade", "abriu unidade", "recem-inaugurada", "recém-inaugurada", "recem inaugurada", "recém inaugurada", "entregue", "foi entregue", "passou a operar", "inicia operacao", "inicia operação", "iniciou operacao", "iniciou operação", "comeca a operar", "começa a operar", "comecou a operar", "começou a operar", "em funcionamento", "ja funciona", "já funciona"];
 const SIGNALS = [
   ["private_permit", 32, ["alvara", "aprovacao de projeto", "projeto aprovado", "licenca de construcao", "licenciamento urbanistico", "alvara de execucao", "uso comercial", "uso industrial"]],
   ["environmental_license", 28, ["licenca de instalacao", "licenca previa", "cetesb", "licenciamento ambiental", "viabilidade ambiental"]],
   ["industrial_expansion", 32, ["expansao fabril", "expansao industrial", "nova fabrica", "ampliacao da fabrica", "planta industrial", "linha de producao", "area produtiva"]],
   ["warehouse_or_logistics", 29, ["centro de distribuicao", "novo cd", "galpao logistico", "hub logistico", "operacao logistica", "condominio logistico"]],
-  ["commercial_expansion", 25, ["nova loja", "inaugura unidade", "nova unidade", "expansao da rede", "abre unidade", "loja conceito", "implantacao de loja"]],
+  ["commercial_expansion", 25, ["nova loja", "nova unidade", "expansao da rede", "abertura prevista", "previsao de abertura", "inauguracao prevista", "vai abrir unidade", "deve abrir unidade", "loja em implantacao", "loja conceito", "implantacao de loja"]],
   ["corporate_fitout", 25, ["retrofit", "mudanca de sede", "nova sede", "escritorio corporativo", "fitout", "adequacao predial", "reforma corporativa"]],
   ["building_systems_upgrade", 27, ["adequacao hidraulica", "adequacao eletrica", "instalacoes hidraulicas", "instalacoes eletricas", "infraestrutura eletrica", "rede hidraulica", "rede eletrica", "subestacao", "entrada de energia", "combate a incendio", "sprinklers"]],
   ["construction_hiring_signal", 20, ["gerente de obras", "coordenador de obras", "analista de facilities", "engenheiro de implantacao", "implantacao de unidade", "expansao imobiliaria"]]
@@ -120,15 +122,15 @@ async function collectNewsSignals() {
   for (const base of bases) {
     for (const city of priorityCities) queries.push(`${base} "${city}"`);
   }
-  const batches = [];
-  for (const query of queries) {
+  const batches = await mapLimit(queries, 8, async (query) => {
     try {
-      batches.push(...await fetchRss(query));
+      return await fetchRss(query);
     } catch {
       // Individual query failures should not kill the whole news collector.
+      return [];
     }
-  }
-  return batches;
+  });
+  return batches.flat();
 }
 
 async function collectCetesbPublicSignals() {
@@ -233,7 +235,7 @@ function parseBrazilianDate(value) {
 
 async function fetchRss(query) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+  const timer = setTimeout(() => controller.abort(), 8000);
   const url = new URL("https://news.google.com/rss/search");
   url.searchParams.set("q", `${query} when:30d`);
   url.searchParams.set("hl", "pt-BR");
@@ -247,7 +249,8 @@ async function fetchRss(query) {
       const block = match[1];
       const title = decodeXml(tag(block, "title"));
       const text = stripHtml(decodeXml(tag(block, "description")));
-      return { id: `rss-${hash(query + title + index)}`, title, text, company_name: "", city: inferCity(`${title} ${text}`)?.label ?? "", source_name: decodeXml(tag(block, "source")) || "Google News RSS", source_url: decodeXml(tag(block, "link")), published_at: decodeXml(tag(block, "pubDate")), detected_at: new Date().toISOString() };
+      const companyName = inferCompanyName(title);
+      return { id: `rss-${hash(query + title + index)}`, title, text, company_name: companyName, city: inferCity(`${title} ${text}`)?.label ?? "", source_name: decodeXml(tag(block, "source")) || "Google News RSS", source_url: decodeXml(tag(block, "link")), published_at: decodeXml(tag(block, "pubDate")), detected_at: new Date().toISOString(), company_name_inferred: Boolean(companyName) };
     }).filter((item) => item.title && item.source_url);
   } finally {
     clearTimeout(timer);
@@ -263,6 +266,8 @@ function classify(raw) {
   if (noise.length) return reject(raw, "public_maintenance_noise", `Contem ruido de manutencao publica: ${noise.join(", ")}`, detectedAt);
   const signalMatch = bestSignal(text);
   if (!signalMatch) return reject(raw, "no_probable_construction_signal", "Nao ha sinal forte de obra, implantacao, expansao, licenca ou retrofit.", detectedAt);
+  const postWork = postWorkHits(text);
+  if (postWork.length) return reject(raw, "post_work_not_preventive", `Sinal parece obra entregue/inaugurada, nao oportunidade preventiva: ${postWork.join(", ")}`, detectedAt, signalMatch.type);
   if (!hasPrivateActor(raw, text)) return reject(raw, "no_private_actor", "Nao ha empresa privada identificavel para abordagem comercial.", detectedAt, signalMatch.type);
   const offerings = matchedOfferings(text, signalMatch.type);
   if (!offerings.length) return reject(raw, "no_sales_fit", "Nao ha aderencia clara ao escopo comercial.", detectedAt, signalMatch.type);
@@ -280,6 +285,17 @@ function classify(raw) {
     why_this_matches_commercial_scope: `Aderencia detectada ao escopo comercial: ${offerings.map((item) => item.label).join(", ")}.`,
     exclusion_reason: null, evidence: { signal_keywords: signalMatch.hits, offering_keywords: offerings.flatMap((item) => item.hits), source_url: raw.source_url ?? null }, raw
   };
+}
+
+async function mapLimit(items, limit, mapper) {
+  const results = [];
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async (_, workerIndex) => {
+    for (let index = workerIndex; index < items.length; index += limit) {
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function reject(raw, reason, detail, detectedAt, signalType = null) {
@@ -349,6 +365,15 @@ async function selfTest() {
   const procurement = classify(signal("Construtora Exemplo Ltda", "Sao Paulo", "Construtora privada vence pregao para fachada de vidro", "Edital do PNCP trata de obra com esquadrias e pintura."));
   assert.equal(procurement.status, "rejected");
   assert.equal(procurement.exclusion_reason, "public_procurement_hard_reject");
+  const postWork = classify(signal("Rede Tardia Ltda", "Sao Paulo", "Rede Tardia inaugurou nova unidade em Sao Paulo", "Obra entregue com fachada comercial, pintura e adequacao predial ja finalizadas."));
+  assert.equal(postWork.status, "rejected");
+  assert.equal(postWork.exclusion_reason, "post_work_not_preventive");
+  const predictiveOpening = classify(signal("Rede Futura Ltda", "Sao Paulo", "Rede Futura vai abrir unidade em Sao Paulo", "Loja em implantacao com fachada comercial, esquadrias e pintura previstas."));
+  assert.equal(predictiveOpening.status, "lead");
+  assert.equal(predictiveOpening.signal_type, "commercial_expansion");
+  const unknownCompany = classify({ ...signal("", "Sao Paulo", "Nova loja em implantacao com reforma de fachada", "Rede privada planeja implantacao, esquadrias e pintura."), company_name: "" });
+  assert.equal(unknownCompany.status, "rejected");
+  assert.equal(unknownCompany.exclusion_reason, "no_private_actor");
   const good = classify(signal("Clinica Modelo Ltda", "Osasco", "Clinica privada inicia adequacao hidraulica e eletrica", "Reforma de nova unidade inclui obra civil, instalacoes hidraulicas, instalacoes eletricas e pintura predial."));
   assert.equal(good.status, "lead");
   assert.equal(good.signal_type, "building_systems_upgrade");
@@ -366,16 +391,39 @@ async function selfTest() {
 function bestSignal(text) {
   return SIGNALS.map((rule) => ({ ...rule, hits: hits(text, rule.keywords) })).filter((rule) => rule.hits.length).sort((a, b) => b.weight - a.weight || b.hits.length - a.hits.length).map((rule) => ({ ...rule, reason: `Detectado por termos: ${rule.hits.join(", ")}.` }))[0] ?? null;
 }
+function postWorkHits(text) {
+  const post = hits(text, POST_WORK);
+  if (!post.length) return [];
+  return hits(text, PREDICTIVE_CONTEXT).length ? [] : post;
+}
 function matchedOfferings(text, signalType) {
   const found = OFFERINGS.map((rule) => ({ key: rule.key, label: rule.label, hits: hits(text, rule.keywords) })).filter((rule) => rule.hits.length);
   if (!found.length && ["industrial_expansion", "warehouse_or_logistics", "private_permit", "corporate_fitout"].includes(signalType)) found.push({ key: "civil_works", label: "obra civil e adequacao", hits: ["sinal fisico de implantacao/expansao"] });
   return found;
 }
-function hasPrivateActor(raw, text) { return !hits([raw.company_name, raw.source_name].filter(Boolean).join(" "), GOVERNMENT).length && (raw.company_name || hits(text, PRIVATE).length || /\b[a-z0-9]+\.com(\.br)?\b/.test(text)); }
+function hasPrivateActor(raw, text) {
+  const company = norm(raw.company_name ?? "");
+  if (!company || company === "empresa privada nao identificada") return false;
+  if (hits(company, GOVERNMENT).length || hits(company, PROCUREMENT).length || hits(company, PUBLIC_NOISE).length) return false;
+  const identity = norm([raw.company_name, raw.source_name].filter(Boolean).join(" "));
+  if (hits(identity, GOVERNMENT).length && !hits(company, PRIVATE).length) return false;
+  return hits(text, PRIVATE).length || !hits(identity, GOVERNMENT).length;
+}
 function hasDirectOffering(items) { return items.some((item) => ["glass_facade", "frames", "painting", "roofing"].includes(item.key)); }
 function approach(type, offerings) { const scope = offerings.map((item) => item.label).join(", "); if (type === "building_systems_upgrade") return `Abordar facilities, engenharia ou manutencao predial com proposta para ${scope}.`; if (["industrial_expansion", "warehouse_or_logistics"].includes(type)) return `Abordar operacoes, engenharia ou compras antes da contratacao final de fornecedores para ${scope}.`; return `Abordar expansao, facilities ou compras com tese direta para ${scope}.`; }
 function ticket(score, type) { if (score >= 88 && ["industrial_expansion", "warehouse_or_logistics", "private_permit"].includes(type)) return "strategic"; if (score >= 78) return "high"; if (score >= 62) return "medium"; return "low"; }
 function inferCity(value = "") { const n = norm(value); return TARGET_CITIES.find((city) => n.includes(city.name)); }
+function inferCompanyName(title = "") {
+  const headline = String(title).split(/\s+-\s+/)[0].trim();
+  const match = headline.match(/^(.{3,80}?)\s+(anuncia|investe|planeja|prepara|projeta|pretende|contrata|inicia|recebe|busca|amplia|expande|lanca|lança|vai\s+abrir|deve\s+abrir|ira\s+abrir|irá\s+abrir|abre|inaugura)\b/i);
+  if (!match) return "";
+  const candidate = match[1].replace(/^(a|o|as|os)\s+/i, "").replace(/\s+(em|no|na|nos|nas)$/i, "").trim();
+  const normalized = norm(candidate);
+  if (candidate.length < 3 || candidate.length > 80) return "";
+  if (hits(normalized, GOVERNMENT).length || hits(normalized, PUBLIC_NOISE).length || hits(normalized, PROCUREMENT).length) return "";
+  if (/^(empresa|companhia|rede privada|grupo privado|setor privado|obra|obras|nova loja|nova unidade)$/i.test(candidate)) return "";
+  return candidate;
+}
 function signal(company_name, city, title, text) { return { id: hash(company_name + title), company_name, city, title, text, address: city, source_name: "Fixture controlada", source_url: `https://example.com/${hash(title)}`, published_at: "2026-05-24T10:00:00.000Z" }; }
 function toCsv(leads) { const headers = ["score", "commercial_fit", "estimated_ticket_band", "company_name", "city", "signal_type", "title", "source_url", "recommended_approach"]; return headers.join(",") + "\n" + leads.map((lead) => headers.map((h) => csv(lead[h])).join(",")).join("\n") + "\n"; }
 function toSummary(result) { const lines = [`# Obra Hunter AI - ${result.metadata.run_id}`, "", `Status: ${result.status.state}`, `Modo: ${result.metadata.mode}`, `Gerado em: ${result.metadata.generated_at}`, "", "## Contagens", "", `- Sinais brutos: ${result.rawSignals.length}`, `- Leads ranqueados: ${result.rankedLeads.length}`, `- Sinais rejeitados: ${result.rejectedSignals.length}`, `- Fontes OK: ${result.status.counts.sources_ok}`, `- Fontes com falha: ${result.status.counts.sources_failed}`, "", "## Top leads", ""]; for (const lead of result.rankedLeads.slice(0, 10)) lines.push(`- ${lead.score} | ${lead.company_name} | ${lead.city} | ${lead.signal_type} | ${lead.rationale}`); if (!result.rankedLeads.length) lines.push("- Nenhum lead privado acionavel nesta execucao."); if (result.status.warnings.length || result.status.failures.length) { lines.push("", "## Alertas", ""); for (const w of result.status.warnings) lines.push(`- WARNING: ${w}`); for (const f of result.status.failures) lines.push(`- FAIL: ${f}`); } return lines.join("\n") + "\n"; }

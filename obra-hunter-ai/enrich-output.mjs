@@ -7,7 +7,7 @@ const PREDICTIVE = ["segundo semestre de 2026", "2o semestre de 2026", "2º seme
 const WINNABLE = ["franquia", "franqueado", "franqueados", "rede regional", "galeria", "lojas de apoio", "mall", "restaurante", "academia", "clinica", "clínica", "laboratorio", "laboratório", "showroom", "padaria", "cafeteria", "loja-produtora", "unidades em implantacao", "unidades em implantação", "novas unidades", "ponto comercial", "expansao em sao paulo", "expansão em são paulo"];
 const HEAVY = ["smart fit", "assaí", "assai", "hapvida", "c&a", "cea", "santander", "iguatemi", "ascenty", "porte engenharia", "racional engenharia"];
 const STARTED = ["obra iniciada", "obras iniciadas", "iniciou a obra", "iniciou as obras", "obra em andamento", "obras em andamento", "em construcao", "em construção", "ritmo acelerado", "canteiro", "fase de obra", "execucao da obra", "execução da obra"];
-const POST = ["inaugurou", "inaugurada", "inaugurado", "recem-inaugurada", "recém-inaugurada", "recem inaugurada", "recém inaugurada", "entregue", "foi entregue", "passou a operar", "inicia operacao", "inicia operação"];
+const POST = ["inaugurou", "inaugurada", "inaugurado", "inaugura unidade", "abre unidade", "abriu unidade", "recem-inaugurada", "recém-inaugurada", "recem inaugurada", "recém inaugurada", "entregue", "foi entregue", "passou a operar", "inicia operacao", "inicia operação", "iniciou operacao", "iniciou operação", "comeca a operar", "começa a operar", "comecou a operar", "começou a operar", "em funcionamento", "ja funciona", "já funciona"];
 
 const CONTACTS = [
   contact(["krispy kreme"], "Joao Luiz Marcola / Krispy Kreme Brasil; time de expansao/operacoes", "executivo/linkedin + formulario oficial", "not_found", "not_found", "https://br.krispykreme.com/pages/contato", "https://www.linkedin.com/company/krispy-kreme-brasil/", "https://br.linkedin.com/in/jo%C3%A3o-luiz-mar%C3%A7ola-66968330", "https://br.krispykreme.com/pages/contato", "media", "Sem telefone/e-mail publico confiavel; melhor rota e formulario oficial + LinkedIn executivo."),
@@ -37,7 +37,8 @@ const enriched = [];
 const contactAudit = [];
 for (const lead of leads) {
   const text = leadText(lead);
-  const postHits = hits(text, POST);
+  const predictiveHits = hits(text, PREDICTIVE);
+  const postHits = predictiveHits.length ? [] : hits(text, POST);
   const heavyHits = hits(text, HEAVY);
   if (postHits.length || heavyHits.length) {
     rejectedByPost.push({

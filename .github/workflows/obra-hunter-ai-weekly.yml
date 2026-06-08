@@ -12,7 +12,7 @@ on:
           - live
           - fixture
   schedule:
-    - cron: "0 10 * * 1"
+    - cron: "17 10 * * 1"
 
 jobs:
   collect-and-email:
@@ -67,7 +67,7 @@ jobs:
         run: node enrich-output.mjs --run-dir="$RUN_DIR"
 
       - name: Send weekly email
-        if: always() && env.EMAIL_READY == 'true' && env.SMTP_SERVER != '' && env.SMTP_USERNAME != '' && env.SMTP_PASSWORD != '' && env.SMTP_FROM != ''
+        if: always() && env.SMTP_SERVER != '' && env.SMTP_USERNAME != '' && env.SMTP_PASSWORD != '' && env.SMTP_FROM != ''
         run: |
           python3 - <<'PY'
           import mimetypes
@@ -118,7 +118,7 @@ jobs:
       - name: No commercial-ready leads
         if: always() && env.EMAIL_READY != 'true'
         run: |
-          echo "Email not sent because no lead passed the commercial-ready filter."
+          echo "No lead passed the commercial-ready filter."
           echo "Check research-backlog.csv in the artifact for raw signals that still need contact enrichment."
 
       - name: Upload run artifacts

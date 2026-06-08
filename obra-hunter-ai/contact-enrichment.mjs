@@ -7,10 +7,13 @@ const MAX_HTML_CHARS = 700000;
 const BAD_EMAIL_PREFIXES = /^(example|teste|test|privacy|privacidade|abuse|postmaster|webmaster)$/i;
 const BAD_DOMAINS = [
   "google.com", "google.com.br", "news.google.com", "facebook.com", "instagram.com", "youtube.com",
-  "jusbrasil.com.br", "reclameaqui.com.br", "linkedin.com"
+  "jusbrasil.com.br", "reclameaqui.com.br", "linkedin.com", "duckduckgo.com",
+  "prefeitura.sp.gov.br", "geosampa.prefeitura.sp.gov.br", "wfs.geosampa.prefeitura.sp.gov.br"
 ];
 const CONTACT_PATH_RE = /contato|contact|fale|atendimento|comercial|franquia|expans|implant|engenharia|facilities|obras|fornecedor/i;
 const CNPJ_DATA_DOMAINS = /casadosdados|cnpj\.biz|econodata|empresascnpj|cnpjrocks|consultasocio/i;
+const BAD_EVIDENCE_PATH_RE = /\.(?:pdf|zip|rar|7z|jpg|jpeg|png|gif|webp|svg|css|js|map|xml|json)$/i;
+const NON_CONTACT_ENDPOINT_RE = /(?:\/geoserver\/|[?&](?:service=wfs|request=getfeature|typename=)|\/wp-json\/|\/oembed\/|\/api\/)/i;
 
 export async function enrichContactPublicly(lead, options = {}) {
   const companyName = cleanCompanyName(lead.company_name);
@@ -96,20 +99,25 @@ export function mergeContactFields(existing, evidence) {
 function buildContactEvidence(companyName, pages) {
   if (!pages.length) return emptyEvidence("Nenhuma pagina publica util encontrada para contato.");
 
-  const scoredPages = pages.map((page) => ({
-    ...page,
-    score: pageScore(companyName, page)
-  })).sort((a, b) => b.score - a.score);
+  const scoredPages = pages.map((page) => {
+    const scored = { ...page };
+    scored.score = pageScore(companyName, scored);
+    return scored;
+  }).sort((a, b) => b.score - a.score);
 
-  const officialPages = scoredPages.filter((page) => page.isOfficial);
+  const crediblePages = scoredPages.filter(isCredibleContactPage);
+  if (!crediblePages.length) return emptyEvidence("Paginas publicas encontradas, mas nenhuma era fonte crivel de contato da empresa.");
+
+  const officialPages = crediblePages.filter((page) => page.isOfficial);
   const official = officialPages[0];
-  const anyPage = scoredPages[0];
-  const allPhones = uniqueBy(scoredPages.flatMap((page) => page.phones), (phone) => onlyDigits(phone)).slice(0, 3);
-  const allEmails = uniqueBy(scoredPages.flatMap((page) => page.emails), (email) => email.toLowerCase()).slice(0, 3);
-  const allForms = uniqueBy(scoredPages.flatMap((page) => page.contactLinks), normalizeUrlForKey).slice(0, 3);
-  const linkedinCompany = scoredPages.map((page) => page.linkedinCompany).find((url) => url && url !== "not_found") ?? "not_found";
-  const linkedinPeople = scoredPages.map((page) => page.linkedinPeople).find((url) => url && url !== "not_found") ?? "not_found";
-  const bestSource = official ?? anyPage;
+  const cnpjData = crediblePages.find((page) => page.isCnpjData);
+  const fieldPages = officialPages.length ? officialPages : crediblePages;
+  const allPhones = uniqueBy(fieldPages.flatMap((page) => page.phones), (phone) => onlyDigits(phone)).slice(0, 3);
+  const allEmails = uniqueBy(fieldPages.flatMap((page) => page.emails), (email) => email.toLowerCase()).slice(0, 3);
+  const allForms = uniqueBy(fieldPages.flatMap((page) => page.contactLinks), normalizeUrlForKey).slice(0, 3);
+  const linkedinCompany = fieldPages.map((page) => page.linkedinCompany).find((url) => url && url !== "not_found") ?? "not_found";
+  const linkedinPeople = fieldPages.map((page) => page.linkedinPeople).find((url) => url && url !== "not_found") ?? "not_found";
+  const bestSource = official ?? cnpjData ?? crediblePages[0];
   const hasDirect = allPhones.length > 0 || allEmails.length > 0;
   const hasRoute = hasDirect || allForms.length > 0 || linkedinCompany !== "not_found";
   const quality = contactQuality({ bestSource, hasDirect, hasRoute });
@@ -128,7 +136,7 @@ function buildContactEvidence(companyName, pages) {
     qualidade_contato: quality,
     comentario_contato: `${bestSource.isOfficial ? "Contato encontrado em fonte oficial." : "Contato encontrado em fonte publica; validar antes de disparo."} ${bestSource.evidenceSummary}`,
     contact_enrichment_mode: "public_web_contact_enrichment",
-    contact_enrichment_sources: scoredPages.slice(0, 5).map((page) => ({
+    contact_enrichment_sources: fieldPages.slice(0, 5).map((page) => ({
       url: page.url,
       source: page.source,
       official: page.isOfficial,
@@ -194,7 +202,7 @@ async function fetchText(url, timeoutMs) {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const contentType = response.headers.get("content-type") ?? "";
-    if (!/html|text|xml|json/i.test(contentType)) throw new Error(`Unsupported content type: ${contentType}`);
+    if (contentType && !/html/i.test(contentType)) throw new Error(`Unsupported content type: ${contentType}`);
     return (await response.text()).slice(0, MAX_HTML_CHARS);
   } finally {
     clearTimeout(timer);
@@ -216,6 +224,15 @@ function pageScore(companyName, page) {
   if (page.linkedinCompany !== "not_found") score += 7;
   if (BAD_DOMAINS.some((domain) => host.endsWith(domain))) score -= 50;
   return score;
+}
+
+function isCredibleContactPage(page) {
+  const host = page.host.toLowerCase().replace(/^www\./, "");
+  if (BAD_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`))) return false;
+  if (BAD_EVIDENCE_PATH_RE.test(new URL(page.url).pathname)) return false;
+  if (NON_CONTACT_ENDPOINT_RE.test(page.url.toLowerCase())) return false;
+  if (page.isOfficial || page.isCnpjData) return page.phones.length || page.emails.length || page.contactLinks.length || page.linkedinCompany !== "not_found";
+  return page.score >= 25 && (page.phones.length || page.emails.length || page.contactLinks.length || page.linkedinCompany !== "not_found");
 }
 
 function contactQuality({ bestSource, hasDirect, hasRoute }) {
@@ -312,7 +329,8 @@ function isUsefulUrl(raw) {
   if (!url) return false;
   const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
   if (BAD_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`))) return false;
-  if (/\.(pdf|zip|rar|7z|jpg|jpeg|png|gif|webp|svg)$/i.test(new URL(url).pathname)) return false;
+  if (BAD_EVIDENCE_PATH_RE.test(new URL(url).pathname)) return false;
+  if (NON_CONTACT_ENDPOINT_RE.test(url.toLowerCase())) return false;
   return true;
 }
 
@@ -434,6 +452,8 @@ export async function selfTest() {
   assert.deepEqual(evidence.phones, ["(11) 98765-4321"]);
   assert.equal(evidence.contactLinks[0], "https://www.acmeobras.com.br/contato");
   assert.equal(evidence.linkedinCompany, "https://www.linkedin.com/company/acme-obras/");
+  assert.equal(isUsefulUrl("https://duckduckgo.com/dist/h.238c80a7d9b754cfcdd5.css"), false);
+  assert.equal(isUsefulUrl("https://wfs.geosampa.prefeitura.sp.gov.br/geoserver/ows?service=WFS&request=GetFeature&typeName=geoportal:licenca_industrial"), false);
 
   const merged = mergeContactFields(
     { telefone_alta_probabilidade: "not_found", email_alta_probabilidade: "not_found", formulario_ou_pagina_contato: "not_found", qualidade_contato: "baixa" },

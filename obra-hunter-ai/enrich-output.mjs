@@ -66,6 +66,7 @@ status.enrichment = {
   public_contact_enrichment: true,
   contact_searches_attempted: contactAudit.filter((item) => item.attempted).length,
   contacts_enriched_from_public_web: contactAudit.filter((item) => item.enriched).length,
+  contacts_promoted_to_commercial_ready: commercialReady.length,
   removed_after_sales_filter: rejectedByPost.length,
   commercial_ready_leads: commercialReady.length,
   research_backlog_leads: researchBacklog.length,
@@ -186,19 +187,19 @@ function unknownContact() {
 
 function prepareEmail(runDir, status, leads, researchBacklog) {
   const topContacts = leads.slice(0, 8).map((lead, index) => `${index + 1}. ${lead.company_name} | ${lead.city} | ${lead.prioridade} | contato: ${lead.contato_prioritario} | tel: ${lead.telefone_alta_probabilidade} | e-mail: ${lead.email_alta_probabilidade}`);
-  const subject = `Obra Hunter AI - ${status.state} - ${status.counts.ranked_leads} leads com contato`;
+  const subject = `Obra Hunter AI - ${status.state} - ${status.counts.ranked_leads} leads qualificados`;
   const body = [
     "Eduardo.",
     "",
-    "Segue o radar semanal de oportunidades privadas de obra. A lista principal agora so entra quando ha empresa identificada, rota de contato e qualidade minima para acao comercial.",
+    "Segue o radar semanal de oportunidades privadas de obra. A lista principal so entra quando ha empresa identificada, sinal de obra plausivel e contato oficial ou rota confiavel para acao comercial.",
     "",
-    "Top contatos para acao comercial:",
+    "Leads qualificados para acao comercial:",
     ...(topContacts.length ? topContacts : ["- Nenhum lead pronto para comercial nesta execucao. Os sinais brutos ficaram no research-backlog.csv para pesquisa manual/enriquecimento."]),
     "",
     `Sinais que nao viraram lead comercial: ${researchBacklog.length}`,
     "",
     "Arquivos anexos:",
-    "- leads.csv, somente leads prontos para comercial",
+    "- leads.csv, somente leads qualificados para comercial",
     "- research-backlog.csv, sinais reais ainda sem contato/empresa/fonte suficientes",
     "- ranked-leads.json",
     "",
@@ -251,12 +252,49 @@ function toSummary({ metadata, status, leads, researchBacklog }) {
 
 function isCommercialReady(lead) {
   if (!lead.company_name || /empresa privada nao identificada/i.test(lead.company_name)) return false;
-  if (/geoserver|GetFeature|typeName=/i.test(lead.source_url || "") && lead.qualidade_contato === "baixa") return false;
-  if (lead.qualidade_contato === "baixa") return false;
+  if (!hasCredibleContactSource(lead)) return false;
+  if (contactQualityRank(lead.qualidade_contato) < 3) return false;
   const hasPhone = lead.telefone_alta_probabilidade && lead.telefone_alta_probabilidade !== "not_found";
   const hasEmail = lead.email_alta_probabilidade && lead.email_alta_probabilidade !== "not_found";
   const hasForm = lead.formulario_ou_pagina_contato && lead.formulario_ou_pagina_contato !== "not_found";
+  const hasLinkedin = lead.linkedin_empresa && lead.linkedin_empresa !== "not_found";
   return Boolean(hasPhone || hasEmail || hasForm);
+}
+
+function hasCredibleContactSource(lead) {
+  if (/fonte publica nao oficial|precisa qualificar/i.test(lead.tipo_contato ?? "")) return false;
+  if (isBadContactUrl(lead.fonte_contato_url)) return false;
+  if (isBadContactUrl(lead.formulario_ou_pagina_contato)) return false;
+  const companyHostMatch = contactHostMatchesCompany(lead, lead.fonte_contato_url) || contactHostMatchesCompany(lead, lead.formulario_ou_pagina_contato);
+  const officialAudit = Array.isArray(lead.contact_enrichment_sources) && lead.contact_enrichment_sources.some((source) => source.official === true && !isBadContactUrl(source.url));
+  return companyHostMatch || officialAudit || /^alta/.test(lead.qualidade_contato ?? "");
+}
+
+function isBadContactUrl(value) {
+  if (!value || value === "not_found") return false;
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    if (/duckduckgo|google|geosampa|geoserver|prefeitura|linkedin|facebook|instagram|youtube/i.test(host)) return true;
+    if (/\.(css|js|json|xml|map|png|jpg|jpeg|gif|webp|svg|pdf|zip)$/i.test(url.pathname)) return true;
+    if (/\/geoserver\/|[?&](service=wfs|request=getfeature|typename=)|\/wp-json\/|\/oembed\/|\/api\//i.test(url.toString())) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function contactHostMatchesCompany(lead, value) {
+  if (!value || value === "not_found") return false;
+  try {
+    const host = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+    const tokens = norm(lead.company_name)
+      .split(" ")
+      .filter((token) => token.length >= 5 && !["ltda", "eireli", "industria", "comercio", "servicos", "grupo", "brasil"].includes(token));
+    return tokens.some((token) => host.includes(token));
+  } catch {
+    return false;
+  }
 }
 
 function hasDirectContact(lead) {
